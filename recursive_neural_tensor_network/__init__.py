@@ -39,6 +39,7 @@ class Defaults(object):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset_directory', type=str, required=True)
     parser.add_argument('--seed', type=int, default=Defaults.seed)
     parser.add_argument('--hidden_size', type=int, default=Defaults.hidden_size)
     parser.add_argument('--root_only', action='store_true', default=Defaults.root_only)
@@ -47,17 +48,10 @@ def main():
 
     random.seed(args.seed)
 
-    dataset_directory = os.path.abspath(os.path.join(
-        os.path.dirname(__file__), '..', '..',
-        'neural-nlp', 'ressources', 'data', 'stanford-sentiment-treebank', 'trees'))
-
-    # gpus = [0]
-    # torch.cuda.set_device(gpus[0])
-
     # ## Data
-    sample = random.choice(open(os.path.join(dataset_directory, 'train.txt'), 'r', encoding='utf-8').readlines())
+    sample = random.choice(open(os.path.join(args.dataset_directory, 'train.txt'), 'r', encoding='utf-8').readlines())
     print(sample)
-    train_data, word2index = load_data(dataset_directory=dataset_directory, type='train')
+    train_data, word2index = load_data(dataset_directory=args.dataset_directory, type='train')
 
     # ## Modeling
     model = RNTN(word2index, args.hidden_size, 5)
@@ -70,7 +64,7 @@ def main():
     torch.save(model.state_dict(), os.path.join(os.path.dirname(__file__), 'weights'))
 
     # ## Test
-    test_data, _ = load_data(dataset_directory=dataset_directory, type='test')
+    test_data, _ = load_data(dataset_directory=args.dataset_directory, type='test')
     accuracy = compute_accuracy(model, test_data, ROOT_ONLY=args.root_only)
     print(accuracy)
 
