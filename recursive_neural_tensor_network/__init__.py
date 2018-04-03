@@ -31,7 +31,7 @@ class Defaults(object):
     hidden_size = 30
     root_only = False
     batch_size = 20
-    epoch = 20
+    num_epochs = 20
     learning_rate = 0.01
     lambda_ = 1e-5
     rescheduled = False
@@ -42,15 +42,23 @@ def main():
     parser.add_argument('--dataset_directory', type=str, required=True)
     parser.add_argument('--seed', type=int, default=Defaults.seed)
     parser.add_argument('--hidden_size', type=int, default=Defaults.hidden_size)
+    parser.add_argument('--num_epochs', type=int, default=Defaults.num_epochs)
+    parser.add_argument('--batch_size', type=int, default=Defaults.batch_size)
+    parser.add_argument('--learning_rate', type=float, default=Defaults.learning_rate)
+    parser.add_argument('--lambda', type=float, dest='lambda_', default=Defaults.lambda_)
+    parser.add_argument('--rescheduled', action='store_true', default=Defaults.rescheduled)
+    parser.add_argument('--no-rescheduled', action='store_false', dest='rescheduled')
     parser.add_argument('--root_only', action='store_true', default=Defaults.root_only)
     parser.add_argument('--no-root_only', action='store_false', dest='root_only')
     args = parser.parse_args()
+    print("Running with args {}".format(vars(args)))
 
     random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     # Data
     sample = random.choice(open(os.path.join(args.dataset_directory, 'train.txt'), 'r', encoding='utf-8').readlines())
-    print(sample)
+    print("Sample from the train set:", sample)
     train_data, word2index = load_data(dataset_directory=args.dataset_directory, type='train')
     test_data, _ = load_data(dataset_directory=args.dataset_directory, type='test')
 
@@ -69,18 +77,22 @@ def main():
         accuracy = compute_accuracy(model, test_data, root_only=args.root_only)
         print("Test accuracy: ".format(accuracy))
 
-    train_epochs(model, train_data, post_epoch_hooks=[save_hook, test_accuracy_hook])
+    print("Starting training")
+    train_epochs(model, train_data,
+                 num_epochs=args.num_epochs, batch_size=args.batch_size, learning_rate=args.learning_rate,
+                 lambda_=args.lambda_, rescheduled=args.rescheduled, root_only=args.root_only,
+                 post_epoch_hooks=[save_hook, test_accuracy_hook])
 
 
 def train_epochs(model, train_data,
-                 batch_size=Defaults.batch_size, num_epochs=Defaults.epoch, learning_rate=Defaults.learning_rate,
+                 batch_size=Defaults.batch_size, num_epochs=Defaults.num_epochs, learning_rate=Defaults.learning_rate,
                  lambda_=Defaults.lambda_, rescheduled=Defaults.rescheduled, root_only=Defaults.root_only,
                  post_epoch_hooks=()):
     # It takes for a while... It builds its computational graph dynamically.
     # So Its computation is difficult to train with batch.
     loss_function = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    for epoch in range(num_epochs):
+    for epoch in range(1, num_epochs + 1):
         # learning rate annealing
         if rescheduled is False and epoch == num_epochs // 2:
             learning_rate *= 0.1
