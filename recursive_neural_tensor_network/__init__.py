@@ -48,82 +48,88 @@ def main():
 
     random.seed(args.seed)
 
-    # ## Data
+    # Data
     sample = random.choice(open(os.path.join(args.dataset_directory, 'train.txt'), 'r', encoding='utf-8').readlines())
     print(sample)
     train_data, word2index = load_data(dataset_directory=args.dataset_directory, type='train')
+    test_data, _ = load_data(dataset_directory=args.dataset_directory, type='test')
 
-    # ## Modeling
+    # Model
     model = RNTN(word2index, args.hidden_size, 5)
     model.init_weight()
     if USE_CUDA:
         model = model.cuda()
+    weights_dir = os.path.dirname(__file__)
 
-    # ## Training
-    train_epochs(model, train_data)
-    torch.save(model.state_dict(), os.path.join(os.path.dirname(__file__), 'weights'))
+    # Run
+    def save_hook(epoch, model):
+        torch.save(model.state_dict(), os.path.join(weights_dir, 'weights-epoch{}'.format(epoch)))
 
-    # ## Test
-    test_data, _ = load_data(dataset_directory=args.dataset_directory, type='test')
-    accuracy = compute_accuracy(model, test_data, ROOT_ONLY=args.root_only)
-    print(accuracy)
+    def test_accuracy_hook(epoch, model):
+        accuracy = compute_accuracy(model, test_data, root_only=args.root_only)
+        print("Test accuracy: ".format(accuracy))
+
+    train_epochs(model, train_data, post_epoch_hooks=[save_hook, test_accuracy_hook])
 
 
-def compute_accuracy(model, data, ROOT_ONLY):
+def train_epochs(model, train_data,
+                 batch_size=Defaults.batch_size, num_epochs=Defaults.epoch, learning_rate=Defaults.learning_rate,
+                 lambda_=Defaults.lambda_, rescheduled=Defaults.rescheduled, root_only=Defaults.root_only,
+                 post_epoch_hooks=()):
+    # It takes for a while... It builds its computational graph dynamically.
+    # So Its computation is difficult to train with batch.
+    loss_function = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    for epoch in range(num_epochs):
+        # learning rate annealing
+        if rescheduled is False and epoch == num_epochs // 2:
+            learning_rate *= 0.1
+            optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=lambda_)  # L2 norm
+            rescheduled = True
+        batch_losses = train_epoch(model, train_data, optimizer, batch_size, loss_function, root_only)
+        print('[%d/%d] mean_loss : %.2f' % (epoch, num_epochs, np.mean(batch_losses)))
+        for post_epoch_hook in post_epoch_hooks:
+            post_epoch_hook(epoch, model)
+    # The convergence of the model is unstable according to the initial values. I tried to 5~6 times for this.
+
+
+def train_epoch(model, train_data, optimizer, batch_size, loss_function, root_only):
+    losses = []
+    for batch in get_batch(batch_size, train_data):
+        loss = train_batch(model, batch, loss_function, optimizer, root_only)
+        losses.append(loss.data.tolist()[0])
+    return losses
+
+
+def train_batch(model, batch, loss_function, optimizer, root_only):
+    LongTensor = torch.cuda.LongTensor if USE_CUDA else torch.LongTensor
+    if root_only:
+        labels = [tree.labels[-1] for tree in batch]
+        labels = Variable(LongTensor(labels))
+    else:
+        labels = [tree.labels for tree in batch]
+        labels = Variable(LongTensor(flatten(labels)))
+    model.zero_grad()
+    preds = model(batch, root_only)
+    loss = loss_function(preds, labels)
+    loss.backward()
+    optimizer.step()
+    return loss
+
+
+def compute_accuracy(model, data, root_only):
     accuracy = 0
     num_node = 0
     for test in data:
         model.zero_grad()
-        preds = model(test, ROOT_ONLY)
-        labels = test.labels[-1:] if ROOT_ONLY else test.labels
+        preds = model(test, root_only)
+        labels = test.labels[-1:] if root_only else test.labels
         for pred, label in zip(preds.max(1)[1].data.tolist(), labels):
             num_node += 1
             if pred == label:
                 accuracy += 1
     accuracy = accuracy / num_node * 100
     return accuracy
-
-
-def train_epochs(model, train_data,
-                 batch_size=Defaults.batch_size, num_epochs=Defaults.epoch, learning_rate=Defaults.learning_rate,
-                 lambda_=Defaults.lambda_, rescheduled=Defaults.rescheduled, root_only=Defaults.root_only):
-    # It takes for a while... It builds its computational graph dynamically. So Its computation is difficult to train with batch.
-
-    LongTensor = torch.cuda.LongTensor if USE_CUDA else torch.LongTensor
-
-    loss_function = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    for epoch in range(num_epochs):
-        losses = []
-
-        # learning rate annealing
-        if rescheduled == False and epoch == num_epochs // 2:
-            learning_rate *= 0.1
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=lambda_)  # L2 norm
-            rescheduled = True
-
-        for i, batch in enumerate(get_batch(batch_size, train_data)):
-
-            if root_only:
-                labels = [tree.labels[-1] for tree in batch]
-                labels = Variable(LongTensor(labels))
-            else:
-                labels = [tree.labels for tree in batch]
-                labels = Variable(LongTensor(flatten(labels)))
-
-            model.zero_grad()
-            preds = model(batch, root_only)
-
-            loss = loss_function(preds, labels)
-            losses.append(loss.data.tolist()[0])
-
-            loss.backward()
-            optimizer.step()
-
-            if i % 100 == 0:
-                print('[%d/%d] mean_loss : %.2f' % (epoch, num_epochs, np.mean(losses)))
-                losses = []
-    # The convergence of the model is unstable according to the initial values. I tried to 5~6 times for this.
 
 
 def draw_nltk_tree(tree):
